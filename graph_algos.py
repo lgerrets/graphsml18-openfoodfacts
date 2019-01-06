@@ -65,14 +65,17 @@ def build_laplacian(W, laplacian_normalization="rw"):
         assert False, "unexpected option in laplacian_normalization"
 
 
-def spectral_analysis(L,chosen_eig_indices,do_clusters=False,do_plots=False,num_classes=2,EPSILON_IS_0=10**(-7)):
+def spectral_analysis(L,k,chosen_eig_indices=None,do_clusters=False,do_plots=False,num_classes=2,EPSILON_IS_0=10**(-7)):
     assert do_plots or do_clusters, "Task must be either to plot or to assign clusters"
 
     # U = (n x n) eigenvector matrix
     # E = (n x n) eigenvalue diagonal matrix (sorted)
 
     n = L.shape[0]
-    S,U = scipy.sparse.linalg.eigs(L,k=len(chosen_eig_indices)) # eigen elements are sorted in descending order
+    if chosen_eig_indices == None:
+        chosen_eig_indices = np.arange(k)
+
+    S,U = scipy.sparse.linalg.eigs(L,k=k) # eigen elements are sorted in descending order
     ordre = np.argsort(np.abs(S)) # ascending order
     S = S[ordre] # ie reordering eigen elements in ascending order
     print(S)
@@ -82,7 +85,8 @@ def spectral_analysis(L,chosen_eig_indices,do_clusters=False,do_plots=False,num_
     U_chosen[np.abs(U_chosen)<EPSILON_IS_0] = 0
     print((U_chosen!=0).sum(axis=0),U_chosen.shape)
     rows_norm = np.linalg.norm(U_chosen, axis=1, ord=2)
-    U_chosen = (U_chosen.T / rows_norm).T
+    U_chosen[rows_norm<=0,:] = 0
+    U_chosen[rows_norm>0,:] = (U_chosen[rows_norm>0,:].T / rows_norm[rows_norm>0]).T
 
     if do_plots:
         # insightful plots of the eigen vecors
@@ -111,7 +115,7 @@ def spectral_analysis(L,chosen_eig_indices,do_clusters=False,do_plots=False,num_
             for i in range(len(uniques)):
                 Y[Y==uniques[i]] = i%8 # mod 8 : this is for compatibility with helper.plot_edges_and_points that can plot only 8 colors
         elif assignment_method == "kmean":
-            Y = skc.KMeans(num_classes).fit_predict(U_chosen)
+            Y[:] = skc.KMeans(num_classes).fit_predict(np.abs(U_chosen))
         else:
             assert False, "assignment_method must be either 'thresh' or 'kmean'"
 

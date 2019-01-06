@@ -1,27 +1,12 @@
-# Prim's maximal spanning tree algorithm
-# Prim's alg idea:
-#  start at any node, find closest neighbor and mark edges
-#  for all remaining nodes, find closest to previous cluster, mark edge
-#  continue until no nodes remain
-#
-# INPUTS: graph defined by adjacency matrix, nxn
-# OUTPUTS: matrix specifying maximum spanning tree (subgraph), nxn
 import matplotlib.pyplot as plt
 import scipy
 import numpy as np
 import networkx as nx
-
-
-
-
-
-
-
-#
-# Other routines used: isConnected.m
-# GB: Oct 7, 2012
-
-
+import random
+import cv2 as cv
+import scipy.io
+import scipy.spatial.distance as sd
+import os
 #Copyright (c) 2013, Massachusetts Institute of Technology. All rights
 #reserved. Redistribution and use in source and binary forms, with or without
 #modification, are permitted provided that the following conditions are met:
@@ -48,12 +33,6 @@ import networkx as nx
 #OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 def is_connected(adj,n):
-# Uses the fact that multiplying the adj matrix to itself k times give the
-# number of ways to get from i to j in k steps. If the end of the
-# multiplication in the sum of all matrices there are 0 entries then the
-# graph is disconnected. Computationally intensive, but can be sped up by
-# the fact that in practice the diameter is very short compared to n, so it
-# will terminate in order of log(n)? steps.
     adjn=np.zeros((n,n))
     adji=adj.copy()
     for i in range(n):
@@ -63,10 +42,8 @@ def is_connected(adj,n):
 
 def max_span_tree(adj):
     n=adj.shape[0]
-    # if not(is_connected(adj,n)):
-    #     print('This graph is not connected. No spanning tree exists')
-    if False: # we assume that the graph is connected, to avoid long computing
-        pass
+    if not(is_connected(adj,n)):
+        print('This graph is not connected. No spanning tree exists')
     else:
         tr=np.zeros((n,n))
         adj[adj==0]=-np.inf
@@ -91,16 +68,52 @@ def max_span_tree(adj):
             
             
             
-     
-            
-            
-            
-            
-            
-        
+def build_similarity_graph(X, var=1, eps=0, k=0):
+  assert eps + k != 0, "Choose either epsilon graph or k-nn graph"
+  dists = sd.squareform(sd.pdist(X, "sqeuclidean"))
+  similarities = np.exp(-dists / var)
+  if eps:
+    similarities[similarities < eps] = 0
+    return similarities
+  if k:
+    sort = np.argsort(similarities)[:, ::-1]  # descending
+    mask = sort[:, k + 1:]  # indices to mask
+    for i, row in enumerate(mask): similarities[i, row] = 0
+    np.fill_diagonal(similarities, 0)  # remove self similarity
+    return (similarities + similarities.T) / 2  # make the graph undirected 
+    return similarities
 
+            
+     
+def build_laplacian(W, laplacian_normalization="",laplacian_regularization=0):
+  degree = W.sum(1)
+  if not laplacian_normalization:
+    L = np.diag(degree) - W
+  elif laplacian_normalization == "sym":
+    aux = np.diag(1 / np.sqrt(degree))
+    L = np.eye(*W.shape) - aux.dot(W.dot(aux))
+  elif laplacian_normalization == "rw":
+    L = np.eye(*W.shape) - np.diag(1 / degree).dot(W)
+  else: raise ValueError
+
+  L += laplacian_regularization*np.eye(L.shape[0])
+
+  return L
+  
+  
+def hardHFS(graph, labels, laplacian):
+  classes = np.unique(labels[labels != 0]).reshape((-1, 1))
+  f = (labels == classes).astype(np.float).T
+  ixmask = np.where(labels == 0)[0]
+  ixlabl = np.where(labels != 0)[0]
+  luu = laplacian[ixmask][:, ixmask]
+  wul = graph[ixmask][:, ixlabl]
+  f[ixmask] = np.linalg.pinv(luu).dot(wul.dot(f[ixlabl]))
+  return f
+
+              
 def plot_edges_and_points(X,Y,W,title=''):
-    colors=['go-','ro-','co-','ko-','yo-','mo-','po-','oo-']
+    colors=['go-','ro-','co-','ko-','yo-','mo-']
     n=len(X)
     G=nx.from_numpy_matrix(W)
     nx.draw_networkx_edges(G,X)
@@ -108,11 +121,7 @@ def plot_edges_and_points(X,Y,W,title=''):
         plt.plot(X[i,0],X[i,1],colors[int(Y[i])])
     plt.title(title)
     plt.axis('equal')
-          
-            
-            
-            
-            
+                   
 def plot_graph_matrix(X,Y,W):
     plt.figure()
     plt.clf()
@@ -121,11 +130,7 @@ def plot_graph_matrix(X,Y,W):
     plt.subplot(1,2,2)
     plt.imshow(W, extent=[0, 1, 0, 1])
     plt.show()           
-            
-            
-            
-            
-            
+                      
 def plot_clustering_result(X,Y,W,spectral_labels,kmeans_labels,normalized_switch=0):
     plt.figure()
     plt.clf()
@@ -142,27 +147,44 @@ def plot_clustering_result(X,Y,W,spectral_labels,kmeans_labels,normalized_switch
     else:
         plot_edges_and_points(X,kmeans_labels,W,'k-means')
     plt.show()    
-    
-    
+
 def plot_the_bend(X, Y, W, spectral_labels, eigenvalues_sorted):
     plt.figure()
     plt.clf()
     plt.subplot(1,3,1)
     plot_edges_and_points(X,Y,W,'ground truth')
-
-    plt.subplot(1,3,2);
+    plt.subplot(1,3,2)
     plot_edges_and_points(X,spectral_labels,W,'spectral clustering')
-    
-    plt.subplot(1,3,3);
+    plt.subplot(1,3,3)
     plt.plot(np.arange(0,len(eigenvalues_sorted),1),eigenvalues_sorted,'v:')
-    plt.show()
+    plt.show()         
+            
+def plot_classification(X, Y,labels,  var=1, eps=0, k=0):
+    plt.figure()
+    W = build_similarity_graph(X, var=var, eps=eps, k=k)
+    plt.subplot(1, 2, 1)
+    plot_edges_and_points(X, Y, W, 'ground truth')
+    plt.subplot(1, 2, 2)
+    plot_edges_and_points(X, labels, W, 'HFS')
+    plt.show()         
+    
+def label_noise(Y, alpha):
+    ind=np.arange(len(Y))
+    random.shuffle(ind)
+    Y[ind[:alpha]] = 3-Y[ind[:alpha]]
+    return Y
+      
+def plot_classification_comparison(X, Y,hard_labels, soft_labels,var=1, eps=0, k=0):
+    plt.figure()
+    W = build_similarity_graph(X, var=var, eps=eps, k=k)
+    plt.subplot(1,3,1)
+    plot_edges_and_points(X, Y, W, 'ground truth')
+    plt.subplot(1,3,2)
+    plot_edges_and_points(X, hard_labels, W, 'Hard-HFS')
+    plt.subplot(1,3,3)
+    plot_edges_and_points(X, soft_labels, W, 'Soft-HFS')
+    plt.show()  
 
-            
-            
-            
-            
-            
-            
-              
-            
+
+  
     
